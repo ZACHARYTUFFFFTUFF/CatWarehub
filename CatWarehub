@@ -1,0 +1,2283 @@
+--[[
+    ╔══════════════════════════════════════════════════════════════╗
+    ║  CatWare Evade Hub v5.0 - Mobile + Dual Version             ║
+    ║  Supports: Legacy Evade & Evade Overhaul                    ║
+    ║  Mobile Optimized | Touch Friendly | Auto Version Detect    ║
+    ╚══════════════════════════════════════════════════════════════╝
+]]--
+
+local Services = {
+    TweenService = game:GetService("TweenService"),
+    UserInputService = game:GetService("UserInputService"),
+    Players = game:GetService("Players"),
+    RunService = game:GetService("RunService"),
+    Lighting = game:GetService("Lighting"),
+    ReplicatedStorage = game:GetService("ReplicatedStorage"),
+    Workspace = game:GetService("Workspace"),
+    TeleportService = game:GetService("TeleportService"),
+    HttpService = game:GetService("HttpService"),
+    VirtualUser = game:GetService("VirtualUser"),
+    VirtualInputManager = game:GetService("VirtualInputManager"),
+    CollectionService = game:GetService("CollectionService"),
+    Stats = game:GetService("Stats"),
+}
+
+local LocalPlayer = Services.Players.LocalPlayer
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+local Camera = Services.Workspace.CurrentCamera
+
+-----------------------------------------------------------------
+-- VERSION DETECTION (Legacy vs Overhaul)
+-----------------------------------------------------------------
+local EvadeVersion = "Unknown"
+local GameFolder = nil
+local EventsFolder = nil
+local NextbotsFolder = nil
+
+-- Try Overhaul first
+pcall(function()
+    local overhaulCheck = Services.Workspace:FindFirstChild("Game") 
+        or Services.ReplicatedStorage:FindFirstChild("Overhaul")
+        or Services.ReplicatedStorage:FindFirstChild("EvadeOverhaul")
+    if overhaulCheck then
+        EvadeVersion = "Overhaul"
+        GameFolder = Services.Workspace:FindFirstChild("Game")
+        EventsFolder = Services.ReplicatedStorage:FindFirstChild("Events") 
+            or Services.ReplicatedStorage:FindFirstChild("RemoteEvents")
+        NextbotsFolder = Services.Workspace:FindFirstChild("Nextbots")
+            or Services.Workspace:FindFirstChild("Bots")
+            or (GameFolder and GameFolder:FindFirstChild("Nextbots"))
+    end
+end)
+
+-- Fallback to Legacy
+if EvadeVersion == "Unknown" then
+    pcall(function()
+        EventsFolder = Services.ReplicatedStorage:FindFirstChild("Events")
+            or Services.ReplicatedStorage:FindFirstChild("Remotes")
+        NextbotsFolder = Services.Workspace:FindFirstChild("Nextbots")
+            or Services.Workspace:FindFirstChild("Monsters")
+            or Services.Workspace:FindFirstChild("Bots")
+        if EventsFolder then
+            EvadeVersion = "Legacy"
+        end
+    end)
+end
+
+-- Final fallback - scan everything
+if EvadeVersion == "Unknown" then
+    for _, child in ipairs(Services.ReplicatedStorage:GetChildren()) do
+        if child:IsA("Folder") and (child.Name:lower():find("event") or child.Name:lower():find("remote")) then
+            EventsFolder = child
+            EvadeVersion = "Legacy"
+            break
+        end
+    end
+    for _, child in ipairs(Services.Workspace:GetChildren()) do
+        if child:IsA("Folder") and (child.Name:lower():find("bot") or child.Name:lower():find("monster")) then
+            NextbotsFolder = child
+            break
+        end
+    end
+end
+
+-- Version-specific helpers
+local function FireEvent(eventName, ...)
+    if not EventsFolder then return end
+    local evt = EventsFolder:FindFirstChild(eventName)
+    if evt and evt:IsA("RemoteEvent") then
+        pcall(function() evt:FireServer(...) end)
+    elseif evt and evt:IsA("RemoteFunction") then
+        pcall(function() evt:InvokeServer(...) end)
+    else
+        local altNames = {
+            Respawn = {"Respawn", "RequestRespawn", "PlayerRespawn"},
+            Revive = {"Revive", "RequestRevive", "PlayerRevive", "RevivePlayer"},
+            Carry = {"Carry", "RequestCarry", "PickUp", "CarryPlayer"},
+            Dash = {"Dash", "RequestDash", "PlayerDash"},
+            Whistle = {"Whistle", "RequestWhistle", "UseWhistle"},
+            Vote = {"Vote", "CastVote", "SubmitVote"},
+            Emote = {"Emote", "PlayEmote", "DoEmote"},
+            Taunt = {"Taunt", "DoTaunt"},
+            Roll = {"Roll", "DodgeRoll", "DoRoll"},
+            Flip = {"Flip", "DoFlip", "Backflip"},
+            Crawl = {"Crawl", "SetCrawling", "ToggleCrawl"},
+            Peek = {"Peek", "SetPeeking", "TogglePeek"},
+            Collect = {"Collect", "Pickup", "GrabItem", "CollectItem"},
+            BuyItem = {"BuyItem", "PurchaseItem", "ShopBuy"},
+            RedeemCode = {"RedeemCode", "CodeRedeem", "SubmitCode"},
+            SetWeather = {"SetWeather", "ChangeWeather", "Weather"},
+        }
+        local alts = altNames[eventName]
+        if alts then
+            for _, alt in ipairs(alts) do
+                local altEvt = EventsFolder:FindFirstChild(alt)
+                if altEvt then
+                    pcall(function() altEvt:FireServer(...) end)
+                    return
+                end
+            end
+        end
+    end
+end
+
+local function GetNextbots()
+    local bots = {}
+    if NextbotsFolder then
+        for _, bot in ipairs(NextbotsFolder:GetChildren()) do
+            table.insert(bots, bot)
+        end
+    end
+    for _, obj in ipairs(Services.Workspace:GetDescendants()) do
+        if obj:IsA("Model") and (obj.Name:lower():find("nextbot") or obj.Name:lower():find("monster") or obj.Name:lower():find("bot_")) then
+            if not table.find(bots, obj) then
+                table.insert(bots, obj)
+            end
+        end
+    end
+    return bots
+end
+
+-----------------------------------------------------------------
+-- MOBILE DETECTION & SCALING
+-----------------------------------------------------------------
+local IsMobile = Services.UserInputService.TouchEnabled 
+    and not Services.UserInputService.KeyboardEnabled
+local TouchDevice = Services.UserInputService.TouchEnabled
+
+local S = IsMobile and 1.3 or 1.0
+local function SC(v) return math.floor(v * S) end
+
+-----------------------------------------------------------------
+-- THEME
+-----------------------------------------------------------------
+local Theme = {
+    Background = Color3.fromRGB(18, 16, 22),
+    CardColor = Color3.fromRGB(30, 27, 36),
+    StrokeColor = Color3.fromRGB(55, 50, 65),
+    Accent = Color3.fromRGB(255, 130, 170),
+    TextColor = Color3.fromRGB(240, 238, 245),
+    SubTextColor = Color3.fromRGB(160, 155, 175),
+    Font = Enum.Font.GothamMedium,
+    FontBold = Enum.Font.GothamBold,
+    Success = Color3.fromRGB(100, 255, 150),
+    Warning = Color3.fromRGB(255, 200, 80),
+    Danger = Color3.fromRGB(255, 80, 80),
+}
+
+-----------------------------------------------------------------
+-- UTILITY FUNCTIONS
+-----------------------------------------------------------------
+local function New(class, props)
+    local inst = Instance.new(class)
+    for k, v in pairs(props) do
+        if k ~= "Parent" then inst[k] = v end
+    end
+    if props.Parent then inst.Parent = props.Parent end
+    return inst
+end
+
+local function Corner(parent, r)
+    return New("UICorner", { CornerRadius = UDim.new(0, SC(r or 10)), Parent = parent })
+end
+
+local function Stroke(parent, color, thick)
+    return New("UIStroke", { 
+        Color = color or Theme.StrokeColor, 
+        Thickness = SC(thick or 1),
+        Parent = parent 
+    })
+end
+
+local function Tween(inst, props, dur, style, dir)
+    local t = Services.TweenService:Create(inst, TweenInfo.new(
+        dur or 0.25, 
+        style or Enum.EasingStyle.Quad, 
+        dir or Enum.EasingDirection.Out
+    ), props)
+    t:Play()
+    return t
+end
+
+local function Spring(inst, props, dur)
+    local t = Services.TweenService:Create(inst, TweenInfo.new(
+        dur or 0.4, 
+        Enum.EasingStyle.Back, 
+        Enum.EasingDirection.Out
+    ), props)
+    t:Play()
+    return t
+end
+
+local function MakeDraggable(handle, target)
+    local dragging, dragStart, startPos = false, nil, nil
+    handle.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 
+            or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = input.Position
+            startPos = target.Position
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then
+                    dragging = false
+                end
+            end)
+        end
+    end)
+    Services.UserInputService.InputChanged:Connect(function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement 
+            or input.UserInputType == Enum.UserInputType.Touch) then
+            local delta = input.Position - dragStart
+            target.Position = UDim2.new(
+                startPos.X.Scale, startPos.X.Offset + delta.X,
+                startPos.Y.Scale, startPos.Y.Offset + delta.Y
+            )
+        end
+    end)
+end
+
+-----------------------------------------------------------------
+-- CHARACTER HELPERS
+-----------------------------------------------------------------
+local function GetChar() return LocalPlayer.Character end
+local function GetHum() 
+    local c = GetChar() 
+    return c and c:FindFirstChildOfClass("Humanoid") 
+end
+local function GetRoot() 
+    local c = GetChar() 
+    return c and (c:FindFirstChild("HumanoidRootPart") or c:FindFirstChild("Torso"))
+end
+
+-----------------------------------------------------------------
+-- GUI SETUP
+-----------------------------------------------------------------
+local function GetGui()
+    local existing = PlayerGui:FindFirstChild("CatWareGui")
+    if existing then existing:Destroy() end
+    local gui = New("ScreenGui", {
+        Name = "CatWareGui",
+        ResetOnSpawn = false,
+        ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+        Parent = PlayerGui,
+    })
+    return gui
+end
+
+local Gui = GetGui()
+
+-----------------------------------------------------------------
+-- NOTIFICATION SYSTEM
+-----------------------------------------------------------------
+local NotifHolder = nil
+local function InitNotifs()
+    NotifHolder = New("Frame", {
+        Name = "NotifHolder",
+        BackgroundTransparency = 1,
+        AnchorPoint = Vector2.new(1, 1),
+        Position = UDim2.new(1, -SC(10), 1, -SC(10)),
+        Size = UDim2.new(0, SC(280), 1, -SC(20)),
+        Parent = Gui,
+    })
+    New("UIListLayout", {
+        Parent = NotifHolder,
+        VerticalAlignment = Enum.VerticalAlignment.Bottom,
+        Padding = UDim.new(0, SC(8)),
+        SortOrder = Enum.SortOrder.LayoutOrder,
+    })
+end
+
+local CatWare = {}
+function CatWare:Notify(data)
+    data = data or {}
+    if not NotifHolder then InitNotifs() end
+    
+    local card = New("Frame", {
+        BackgroundColor3 = Theme.CardColor,
+        Size = UDim2.new(1, 0, 0, SC(68)),
+        Position = UDim2.new(1, SC(30), 0, 0),
+        Parent = NotifHolder,
+    })
+    Corner(card, 10)
+    Stroke(card, Theme.StrokeColor)
+    
+    New("Frame", {
+        BackgroundColor3 = data.Color or Theme.Accent,
+        Size = UDim2.new(0, SC(4), 1, -SC(12)),
+        Position = UDim2.new(0, SC(6), 0, SC(6)),
+        Parent = card,
+    })
+    Corner(card:FindFirstChildWhichIsA("Frame"), 2)
+    
+    New("TextLabel", {
+        BackgroundTransparency = 1,
+        Position = UDim2.new(0, SC(18), 0, SC(6)),
+        Size = UDim2.new(1, -SC(28), 0, SC(20)),
+        Font = Theme.FontBold,
+        Text = data.Title or "Notice",
+        TextColor3 = Theme.TextColor,
+        TextSize = SC(13),
+        TextXAlignment = Enum.TextXAlignment.Left,
+        Parent = card,
+    })
+    New("TextLabel", {
+        BackgroundTransparency = 1,
+        Position = UDim2.new(0, SC(18), 0, SC(26)),
+        Size = UDim2.new(1, -SC(28), 0, SC(36)),
+        Font = Theme.Font,
+        Text = data.Content or "",
+        TextColor3 = Theme.SubTextColor,
+        TextSize = SC(11),
+        TextWrapped = true,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        TextYAlignment = Enum.TextYAlignment.Top,
+        Parent = card,
+    })
+    
+    Tween(card, { Position = UDim2.new(0, 0, 0, 0) }, 0.35, Enum.EasingStyle.Quart)
+    
+    task.delay(data.Duration or 3, function()
+        if card and card.Parent then
+            Tween(card, { Position = UDim2.new(1, SC(30), 0, 0) }, 0.3, Enum.EasingStyle.Quart, Enum.EasingDirection.In)
+            task.wait(0.3)
+            if card and card.Parent then card:Destroy() end
+        end
+    end)
+end
+
+-----------------------------------------------------------------
+-- INTRO ANIMATION
+-----------------------------------------------------------------
+local function PlayIntro()
+    local container = New("Frame", {
+        Size = UDim2.new(1, 0, 1, 0),
+        BackgroundColor3 = Theme.Background,
+        ZIndex = 100,
+        Parent = Gui,
+    })
+    
+    local leftEar = New("Frame", {
+        AnchorPoint = Vector2.new(0.5, 1),
+        Position = UDim2.new(0.5, -SC(55), 0.5, 0),
+        Size = UDim2.new(0, 0, 0, 0),
+        Rotation = -25,
+        BackgroundColor3 = Theme.Background,
+        BorderSizePixel = 0,
+        ZIndex = 101,
+        Parent = container,
+    })
+    Corner(leftEar, 16)
+    Stroke(leftEar, Theme.Accent, 3)
+    
+    local rightEar = New("Frame", {
+        AnchorPoint = Vector2.new(0.5, 1),
+        Position = UDim2.new(0.5, SC(55), 0.5, 0),
+        Size = UDim2.new(0, 0, 0, 0),
+        Rotation = 25,
+        BackgroundColor3 = Theme.Background,
+        BorderSizePixel = 0,
+        ZIndex = 101,
+        Parent = container,
+    })
+    Corner(rightEar, 16)
+    Stroke(rightEar, Theme.Accent, 3)
+    
+    local text = New("TextLabel", {
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.new(0.5, 0, 0.5, SC(55)),
+        Size = UDim2.new(0, SC(400), 0, SC(60)),
+        BackgroundTransparency = 1,
+        Font = Theme.FontBold,
+        Text = "",
+        TextColor3 = Theme.TextColor,
+        TextSize = SC(26),
+        TextTransparency = 1,
+        ZIndex = 105,
+        Parent = container,
+    })
+    
+    local sound = New("Sound", {
+        SoundId = "rbxassetid://138131333",
+        Volume = 2,
+        Parent = container,
+    })
+    
+    Spring(leftEar, { Size = UDim2.new(0, SC(85), 0, SC(85)) }, 0.6)
+    Spring(rightEar, { Size = UDim2.new(0, SC(85), 0, SC(85)) }, 0.6)
+    task.wait(0.6)
+    
+    text.Text = "CatWare v5.0"
+    Tween(text, { TextTransparency = 0 }, 0.4, Enum.EasingStyle.Quart)
+    task.wait(0.8)
+    
+    text.Text = EvadeVersion == "Overhaul" and "Evade Overhaul" or "Evade Legacy"
+    Tween(text, { TextSize = SC(22), TextColor3 = Theme.Accent }, 0.3)
+    task.wait(0.6)
+    
+    text.Text = "MEOW!"
+    Tween(text, { TextSize = SC(44), TextColor3 = Theme.Accent }, 0.2, Enum.EasingStyle.Back)
+    sound:Play()
+    task.wait(0.7)
+    
+    Tween(leftEar, { Size = UDim2.new(0, 0, 0, 0), BackgroundTransparency = 1 }, 0.4, Enum.EasingStyle.Back, Enum.EasingDirection.In)
+    Tween(rightEar, { Size = UDim2.new(0, 0, 0, 0), BackgroundTransparency = 1 }, 0.4, Enum.EasingStyle.Back, Enum.EasingDirection.In)
+    Tween(text, { TextTransparency = 1 }, 0.3)
+    Tween(container, { BackgroundTransparency = 1 }, 0.4)
+    task.wait(0.5)
+    container:Destroy()
+end
+
+PlayIntro()
+
+-----------------------------------------------------------------
+-- MAIN WINDOW (MOBILE OPTIMIZED)
+-----------------------------------------------------------------
+local WinSize = Vector2.new(SC(540), SC(400))
+
+local MainFrame = New("Frame", {
+    Name = "Main",
+    AnchorPoint = Vector2.new(0.5, 0.5),
+    Position = UDim2.new(0.5, 0, 0.5, 0),
+    Size = UDim2.new(0, 0, 0, 0),
+    BackgroundColor3 = Theme.Background,
+    ClipsDescendants = true,
+    Parent = Gui,
+})
+Corner(MainFrame, 12)
+Stroke(MainFrame, Theme.StrokeColor, 1)
+Spring(MainFrame, { Size = UDim2.new(0, WinSize.X, 0, WinSize.Y) }, 0.5)
+
+-- Background image
+New("ImageLabel", {
+    Image = "rbxthumb://type=Asset&id=121908110981826&w=420&h=420",
+    BackgroundTransparency = 1,
+    Size = UDim2.new(1, 0, 1, 0),
+    ScaleType = Enum.ScaleType.Crop,
+    ImageTransparency = 0.88,
+    ZIndex = 1,
+    Parent = MainFrame,
+})
+
+local Interface = New("Frame", {
+    BackgroundTransparency = 1,
+    Size = UDim2.new(1, 0, 1, 0),
+    ZIndex = 2,
+    Parent = MainFrame,
+})
+
+-- TOP BAR
+local TopBar = New("Frame", {
+    BackgroundTransparency = 1,
+    Size = UDim2.new(1, 0, 0, SC(48)),
+    Parent = Interface,
+})
+
+New("TextLabel", {
+    BackgroundTransparency = 1,
+    Position = UDim2.new(0, SC(14), 0, SC(6)),
+    Size = UDim2.new(1, -SC(80), 0, SC(20)),
+    Font = Theme.FontBold,
+    Text = "CatWare",
+    TextColor3 = Theme.TextColor,
+    TextSize = SC(16),
+    TextXAlignment = Enum.TextXAlignment.Left,
+    Parent = TopBar,
+})
+
+New("TextLabel", {
+    BackgroundTransparency = 1,
+    Position = UDim2.new(0, SC(14), 0, SC(26)),
+    Size = UDim2.new(1, -SC(80), 0, SC(16)),
+    Font = Theme.Font,
+    Text = EvadeVersion .. " | Mobile Ready",
+    TextColor3 = Theme.SubTextColor,
+    TextSize = SC(11),
+    TextXAlignment = Enum.TextXAlignment.Left,
+    Parent = TopBar,
+})
+
+-- Close button
+local CloseBtn = New("TextButton", {
+    AnchorPoint = Vector2.new(1, 0.5),
+    Position = UDim2.new(1, -SC(12), 0, SC(24)),
+    Size = UDim2.new(0, SC(28), 0, SC(28)),
+    BackgroundTransparency = 1,
+    Text = "X",
+    Font = Theme.FontBold,
+    TextColor3 = Theme.TextColor,
+    TextSize = SC(14),
+    Parent = TopBar,
+})
+Corner(CloseBtn, 6)
+Stroke(CloseBtn, Theme.Accent, 1)
+
+CloseBtn.MouseEnter:Connect(function()
+    Tween(CloseBtn, { BackgroundColor3 = Theme.Danger, BackgroundTransparency = 0.3 }, 0.15)
+end)
+CloseBtn.MouseLeave:Connect(function()
+    Tween(CloseBtn, { BackgroundTransparency = 1 }, 0.15)
+end)
+
+-- FLOATING OPEN BUTTON (Mobile friendly)
+local OpenBtn = New("ImageButton", {
+    Name = "OpenBtn",
+    Image = "rbxassetid://121908110981826",
+    Position = UDim2.new(0, SC(12), 0.5, -SC(24)),
+    Size = UDim2.new(0, 0, 0, 0),
+    BackgroundColor3 = Theme.CardColor,
+    Visible = false,
+    Parent = Gui,
+})
+Corner(OpenBtn, 24)
+Stroke(OpenBtn, Theme.Accent, 2)
+MakeDraggable(OpenBtn, OpenBtn)
+
+CloseBtn.MouseButton1Click:Connect(function()
+    Tween(MainFrame, { Size = UDim2.new(0, WinSize.X, 0, 0) }, 0.25, Enum.EasingStyle.Quart, Enum.EasingDirection.In)
+    task.wait(0.25)
+    MainFrame.Visible = false
+    OpenBtn.Visible = true
+    Spring(OpenBtn, { Size = UDim2.new(0, SC(52), 0, SC(52)) }, 0.4)
+end)
+
+OpenBtn.MouseButton1Click:Connect(function()
+    OpenBtn.Visible = false
+    MainFrame.Visible = true
+    Spring(MainFrame, { Size = UDim2.new(0, WinSize.X, 0, WinSize.Y) }, 0.4)
+end)
+
+MakeDraggable(TopBar, MainFrame)
+
+-----------------------------------------------------------------
+-- TAB SYSTEM (BOTTOM BAR FOR MOBILE THUMB ACCESS)
+-----------------------------------------------------------------
+local Tabs = {}
+local ActiveTab = nil
+local TabButtons = {}
+local TabPages = {}
+
+-- Content area (above tab bar)
+local ContentArea = New("Frame", {
+    Position = UDim2.new(0, SC(10), 0, SC(50)),
+    Size = UDim2.new(1, -SC(20), 1, -SC(110)),
+    BackgroundTransparency = 1,
+    Parent = Interface,
+})
+
+-- Tab bar at bottom
+local TabBar = New("Frame", {
+    AnchorPoint = Vector2.new(0.5, 1),
+    Position = UDim2.new(0.5, 0, 1, -SC(8)),
+    Size = UDim2.new(1, -SC(16), 0, SC(48)),
+    BackgroundTransparency = 0.92,
+    BackgroundColor3 = Theme.CardColor,
+    Parent = Interface,
+})
+Corner(TabBar, 10)
+Stroke(TabBar, Theme.StrokeColor)
+
+local TabLayout = New("UIListLayout", {
+    Parent = TabBar,
+    FillDirection = Enum.FillDirection.Horizontal,
+    HorizontalAlignment = Enum.HorizontalAlignment.Center,
+    VerticalAlignment = Enum.VerticalAlignment.Center,
+    Padding = UDim.new(0, SC(6)),
+})
+
+local function SelectTab(name)
+    for n, page in pairs(TabPages) do
+        page.Visible = false
+    end
+    for n, btn in pairs(TabButtons) do
+        Tween(btn, { BackgroundTransparency = 1 }, 0.2)
+        btn.TextColor3 = Theme.SubTextColor
+        local s = btn:FindFirstChildOfClass("UIStroke")
+        if s then Tween(s, { Color = Theme.StrokeColor }, 0.2) end
+    end
+    
+    if TabPages[name] then
+        TabPages[name].Visible = true
+        ActiveTab = name
+    end
+    if TabButtons[name] then
+        local btn = TabButtons[name]
+        Tween(btn, { BackgroundTransparency = 0.85, BackgroundColor3 = Theme.Accent }, 0.2)
+        btn.TextColor3 = Theme.TextColor
+        local s = btn:FindFirstChildOfClass("UIStroke")
+        if s then Tween(s, { Color = Theme.Accent }, 0.2) end
+    end
+end
+
+local function AddTab(name)
+    local tabBtn = New("TextButton", {
+        Size = UDim2.new(0, SC(80), 0, SC(36)),
+        BackgroundTransparency = 1,
+        Text = name,
+        Font = Theme.FontBold,
+        TextColor3 = Theme.SubTextColor,
+        TextSize = SC(11),
+        AutoButtonColor = false,
+        Parent = TabBar,
+    })
+    Corner(tabBtn, 8)
+    Stroke(tabBtn, Theme.StrokeColor)
+    
+    local page = New("ScrollingFrame", {
+        Size = UDim2.new(1, 0, 1, 0),
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        ScrollBarThickness = SC(4),
+        ScrollBarImageColor3 = Theme.Accent,
+        CanvasSize = UDim2.new(0, 0, 0, 0),
+        AutomaticCanvasSize = Enum.AutomaticSize.Y,
+        Visible = false,
+        Parent = ContentArea,
+    })
+    New("UIListLayout", {
+        Parent = page,
+        Padding = UDim.new(0, SC(8)),
+        SortOrder = Enum.SortOrder.LayoutOrder,
+    })
+    New("UIPadding", {
+        Parent = page,
+        PaddingTop = UDim.new(0, SC(4)),
+        PaddingBottom = UDim.new(0, SC(10)),
+    })
+    
+    tabBtn.MouseButton1Click:Connect(function() SelectTab(name) end)
+    
+    TabButtons[name] = tabBtn
+    TabPages[name] = page
+    Tabs[name] = {}
+    
+    if not ActiveTab then SelectTab(name) end
+    
+    -- Element creators
+    local Tab = {}
+    
+    function Tab:AddToggle(data)
+        data = data or {}
+        local state = data.Default or false
+        local holder = New("Frame", {
+            Size = UDim2.new(1, 0, 0, SC(42)),
+            BackgroundTransparency = 1,
+            Parent = page,
+        })
+        Corner(holder, 8)
+        Stroke(holder, Theme.StrokeColor)
+        
+        New("TextLabel", {
+            BackgroundTransparency = 1,
+            Position = UDim2.new(0, SC(12), 0, 0),
+            Size = UDim2.new(1, -SC(80), 1, 0),
+            Font = Theme.Font,
+            Text = data.Text or "Toggle",
+            TextColor3 = Theme.TextColor,
+            TextSize = SC(12),
+            TextXAlignment = Enum.TextXAlignment.Left,
+            Parent = holder,
+        })
+        
+        local switch = New("Frame", {
+            AnchorPoint = Vector2.new(1, 0.5),
+            Position = UDim2.new(1, -SC(10), 0.5, 0),
+            Size = UDim2.new(0, SC(44), 0, SC(22)),
+            BackgroundTransparency = state and 0 or 0.6,
+            BackgroundColor3 = state and Theme.Accent or Theme.StrokeColor,
+            Parent = holder,
+        })
+        Corner(switch, 11)
+        
+        local knob = New("Frame", {
+            Size = UDim2.new(0, SC(18), 0, SC(18)),
+            Position = state and UDim2.new(1, -SC(20), 0.5, -SC(9)) or UDim2.new(0, SC(2), 0.5, -SC(9)),
+            BackgroundColor3 = Color3.new(1, 1, 1),
+            Parent = switch,
+        })
+        Corner(knob, 9)
+        
+        local click = New("TextButton", {
+            Size = UDim2.new(1, 0, 1, 0),
+            BackgroundTransparency = 1,
+            Text = "",
+            Parent = holder,
+        })
+        
+        click.MouseButton1Click:Connect(function()
+            state = not state
+            Tween(switch, {
+                BackgroundColor3 = state and Theme.Accent or Theme.StrokeColor,
+                BackgroundTransparency = state and 0 or 0.6
+            }, 0.2, Enum.EasingStyle.Quart)
+            Tween(knob, { 
+                Position = state and UDim2.new(1, -SC(20), 0.5, -SC(9)) or UDim2.new(0, SC(2), 0.5, -SC(9)) 
+            }, 0.2, Enum.EasingStyle.Quart)
+            if data.Callback then data.Callback(state) end
+        end)
+        return holder
+    end
+    
+    function Tab:AddButton(data)
+        data = data or {}
+        local btn = New("TextButton", {
+            Size = UDim2.new(1, 0, 0, SC(40)),
+            BackgroundTransparency = 1,
+            Text = data.Text or "Button",
+            Font = Theme.FontBold,
+            TextColor3 = Theme.TextColor,
+            TextSize = SC(12),
+            AutoButtonColor = false,
+            Parent = page,
+        })
+        Corner(btn, 8)
+        Stroke(btn, Theme.Accent)
+        
+        btn.MouseEnter:Connect(function()
+            Tween(btn, { BackgroundTransparency = 0.8, BackgroundColor3 = Theme.Accent }, 0.15)
+        end)
+        btn.MouseLeave:Connect(function()
+            Tween(btn, { BackgroundTransparency = 1 }, 0.15)
+        end)
+        btn.MouseButton1Click:Connect(function()
+            Spring(btn, { Size = UDim2.new(0.97, 0, 0, SC(40)) }, 0.1)
+            task.wait(0.1)
+            Spring(btn, { Size = UDim2.new(1, 0, 0, SC(40)) }, 0.15)
+            if data.Callback then data.Callback() end
+        end)
+        return btn
+    end
+    
+    -- UNLIMITED VALUE INPUT (TextBox)
+    function Tab:AddValue(data)
+        data = data or {}
+        local holder = New("Frame", {
+            Size = UDim2.new(1, 0, 0, SC(42)),
+            BackgroundTransparency = 1,
+            Parent = page,
+        })
+        Corner(holder, 8)
+        Stroke(holder, Theme.StrokeColor)
+        
+        New("TextLabel", {
+            BackgroundTransparency = 1,
+            Position = UDim2.new(0, SC(12), 0, 0),
+            Size = UDim2.new(0.5, -SC(16), 1, 0),
+            Font = Theme.Font,
+            Text = data.Text or "Value",
+            TextColor3 = Theme.TextColor,
+            TextSize = SC(12),
+            TextXAlignment = Enum.TextXAlignment.Left,
+            Parent = holder,
+        })
+        
+        local box = New("TextBox", {
+            AnchorPoint = Vector2.new(1, 0.5),
+            Position = UDim2.new(1, -SC(8), 0.5, 0),
+            Size = UDim2.new(0, SC(100), 0, SC(28)),
+            BackgroundTransparency = 0.9,
+            BackgroundColor3 = Theme.CardColor,
+            Text = tostring(data.Default or 0),
+            Font = Theme.FontBold,
+            TextColor3 = Theme.TextColor,
+            TextSize = SC(12),
+            ClearTextOnFocus = false,
+            Parent = holder,
+        })
+        Corner(box, 6)
+        Stroke(box, Theme.Accent)
+        
+        box.FocusLost:Connect(function()
+            local num = tonumber(box.Text)
+            if num then
+                if data.Min and num < data.Min then num = data.Min box.Text = tostring(num) end
+                if data.Max and num > data.Max then num = data.Max box.Text = tostring(num) end
+                if data.Callback then data.Callback(num) end
+            else
+                box.Text = tostring(data.Default or 0)
+            end
+        end)
+        return holder, box
+    end
+    
+    function Tab:AddLabel(text)
+        return New("TextLabel", {
+            Size = UDim2.new(1, 0, 0, SC(20)),
+            BackgroundTransparency = 1,
+            Font = Theme.Font,
+            Text = text or "",
+            TextColor3 = Theme.SubTextColor,
+            TextSize = SC(11),
+            TextXAlignment = Enum.TextXAlignment.Left,
+            Parent = page,
+        })
+    end
+    
+    function Tab:AddDropdown(data)
+        data = data or {}
+        local selected = data.Default or (data.Options and data.Options[1]) or ""
+        local holder = New("Frame", {
+            Size = UDim2.new(1, 0, 0, SC(42)),
+            BackgroundTransparency = 1,
+            Parent = page,
+        })
+        Corner(holder, 8)
+        Stroke(holder, Theme.StrokeColor)
+        
+        New("TextLabel", {
+            BackgroundTransparency = 1,
+            Position = UDim2.new(0, SC(12), 0, 0),
+            Size = UDim2.new(1, -SC(140), 1, 0),
+            Font = Theme.Font,
+            Text = data.Text or "Select",
+            TextColor3 = Theme.TextColor,
+            TextSize = SC(12),
+            TextXAlignment = Enum.TextXAlignment.Left,
+            Parent = holder,
+        })
+        
+        local btn = New("TextButton", {
+            AnchorPoint = Vector2.new(1, 0.5),
+            Position = UDim2.new(1, -SC(8), 0.5, 0),
+            Size = UDim2.new(0, SC(120), 0, SC(28)),
+            BackgroundTransparency = 0.9,
+            BackgroundColor3 = Theme.CardColor,
+            Text = selected,
+            Font = Theme.Font,
+            TextColor3 = Theme.TextColor,
+            TextSize = SC(11),
+            Parent = holder,
+        })
+        Corner(btn, 6)
+        Stroke(btn, Theme.Accent)
+        
+        btn.MouseButton1Click:Connect(function()
+            if data.Options then
+                local idx = table.find(data.Options, selected) or 1
+                idx = idx % #data.Options + 1
+                selected = data.Options[idx]
+                btn.Text = selected
+                if data.Callback then data.Callback(selected) end
+            end
+        end)
+        return holder
+    end
+    
+    return Tab
+end
+
+-----------------------------------------------------------------
+-- CREATE TABS
+-----------------------------------------------------------------
+local MainTab = AddTab("Main")
+local MoveTab = AddTab("Move")
+local VisualTab = AddTab("Visuals")
+local TeleportTab = AddTab("TP")
+local MiscTab = AddTab("Misc")
+local InfoTab = AddTab("Info")
+
+-----------------------------------------------------------------
+-- MAIN TAB FEATURES
+-----------------------------------------------------------------
+MainTab:AddLabel("=== Auto Farm ===")
+
+local autoRespawn = false
+MainTab:AddToggle({
+    Text = "Auto Respawn",
+    Default = false,
+    Callback = function(v)
+        autoRespawn = v
+        task.spawn(function()
+            while autoRespawn do
+                task.wait(0.5)
+                local hum = GetHum()
+                if hum and hum.Health <= 0 then
+                    FireEvent("Respawn")
+                end
+            end
+        end)
+    end
+})
+
+local autoRevive = false
+MainTab:AddToggle({
+    Text = "Auto Revive Others",
+    Default = false,
+    Callback = function(v)
+        autoRevive = v
+        task.spawn(function()
+            while autoRevive do
+                task.wait(0.3)
+                local root = GetRoot()
+                if not root then continue end
+                for _, plr in ipairs(Services.Players:GetPlayers()) do
+                    if plr ~= LocalPlayer and plr.Character then
+                        local theirRoot = plr.Character:FindFirstChild("HumanoidRootPart")
+                        local theirHum = plr.Character:FindFirstChildOfClass("Humanoid")
+                        if theirRoot and theirHum and theirHum.Health <= 0 then
+                            if (theirRoot.Position - root.Position).Magnitude < 12 then
+                                FireEvent("Revive", plr)
+                            end
+                        end
+                    end
+                end
+            end
+        end)
+    end
+})
+
+local autoCarry = false
+MainTab:AddToggle({
+    Text = "Auto Carry Downed",
+    Default = false,
+    Callback = function(v)
+        autoCarry = v
+        task.spawn(function()
+            while autoCarry do
+                task.wait(0.4)
+                local root = GetRoot()
+                if not root then continue end
+                for _, plr in ipairs(Services.Players:GetPlayers()) do
+                    if plr ~= LocalPlayer and plr.Character then
+                        local theirRoot = plr.Character:FindFirstChild("HumanoidRootPart")
+                        local theirHum = plr.Character:FindFirstChildOfClass("Humanoid")
+                        if theirRoot and theirHum and theirHum.Health <= 0 then
+                            if (theirRoot.Position - root.Position).Magnitude < 10 then
+                                FireEvent("Carry", plr)
+                            end
+                        end
+                    end
+                end
+            end
+        end)
+    end
+})
+
+local godMode = false
+MainTab:AddToggle({
+    Text = "God Mode",
+    Default = false,
+    Callback = function(v)
+        godMode = v
+        task.spawn(function()
+            while godMode do
+                task.wait(0.05)
+                local hum = GetHum()
+                if hum then
+                    if hum.Health < hum.MaxHealth then hum.Health = hum.MaxHealth end
+                    local char = GetChar()
+                    if char then
+                        local downed = char:FindFirstChild("Downed")
+                        if downed and downed:IsA("BoolValue") then downed.Value = false end
+                    end
+                end
+            end
+        end)
+    end
+})
+
+local autoFarmCollect = false
+MainTab:AddToggle({
+    Text = "Auto Farm Collectables",
+    Default = false,
+    Callback = function(v)
+        autoFarmCollect = v
+        task.spawn(function()
+            while autoFarmCollect do
+                task.wait(0.5)
+                local root = GetRoot()
+                if not root then continue end
+                for _, obj in ipairs(Services.Workspace:GetDescendants()) do
+                    if obj:IsA("BasePart") and (obj.Name:lower():find("candy") or obj.Name:lower():find("coin") 
+                        or obj.Name:lower():find("collect") or obj.Name:lower():find("cash") 
+                        or obj.Name:lower():find("bubble") or obj.Name:lower():find("token")) then
+                        if (obj.Position - root.Position).Magnitude < 200 then
+                            root.CFrame = obj.CFrame + Vector3.new(0, 2, 0)
+                            task.wait(0.1)
+                            FireEvent("Collect", obj)
+                        end
+                    end
+                end
+            end
+        end)
+    end
+})
+
+local autoInteract = false
+MainTab:AddToggle({
+    Text = "Auto Interact (E)",
+    Default = false,
+    Callback = function(v)
+        autoInteract = v
+        task.spawn(function()
+            while autoInteract do
+                task.wait(0.2)
+                pcall(function()
+                    Services.VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.E, false, game)
+                    task.wait(0.05)
+                    Services.VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+                end)
+            end
+        end)
+    end
+})
+
+local autoCola = false
+MainTab:AddToggle({
+    Text = "Auto Use Items",
+    Default = false,
+    Callback = function(v)
+        autoCola = v
+        task.spawn(function()
+            while autoCola do
+                task.wait(1)
+                local char = GetChar()
+                if char then
+                    for _, tool in ipairs(char:GetChildren()) do
+                        if tool:IsA("Tool") then
+                            pcall(function() tool:Activate() end)
+                        end
+                    end
+                    for _, tool in ipairs(LocalPlayer.Backpack:GetChildren()) do
+                        if tool:IsA("Tool") and (tool.Name:lower():find("cola") or tool.Name:lower():find("soda") 
+                            or tool.Name:lower():find("med") or tool.Name:lower():find("kit")) then
+                            pcall(function()
+                                tool.Parent = char
+                                tool:Activate()
+                            end)
+                        end
+                    end
+                end
+            end
+        end)
+    end
+})
+
+local antiAFK = false
+MainTab:AddToggle({
+    Text = "Anti AFK",
+    Default = false,
+    Callback = function(v)
+        antiAFK = v
+        if v then
+            local conn
+            conn = LocalPlayer.Idled:Connect(function()
+                if antiAFK then
+                    pcall(function() Services.VirtualUser:Button2Down(Vector2.new(0,0), Camera.CFrame) end)
+                    task.wait(1)
+                    pcall(function() Services.VirtualUser:Button2Up(Vector2.new(0,0), Camera.CFrame) end)
+                else
+                    conn:Disconnect()
+                end
+            end)
+        end
+    end
+})
+
+MainTab:AddButton({
+    Text = "Redeem All Codes",
+    Callback = function()
+        local codes = {"EVADE2024", "HAPPY2024", "FREECOINS", "UPDATE", "THANKS", 
+            "SUMMER2026", "BUBBLES", "LEGACY", "OVERHAUL", "NEWYEAR"}
+        for _, code in ipairs(codes) do
+            FireEvent("RedeemCode", code)
+            task.wait(0.3)
+        end
+        CatWare:Notify({ Title = "Codes", Content = "Redeemed all codes!", Duration = 3 })
+    end
+})
+
+
+-----------------------------------------------------------------
+-- MOVEMENT TAB (ALL AUTO ACTIONS + UNLIMITED VALUES)
+-----------------------------------------------------------------
+MoveTab:AddLabel("=== Unlimited Values ===")
+
+local speedVal = 16
+MoveTab:AddValue({
+    Text = "WalkSpeed",
+    Default = 16,
+    Callback = function(v)
+        speedVal = v
+        local hum = GetHum()
+        if hum then hum.WalkSpeed = v end
+    end
+})
+
+local jumpVal = 50
+MoveTab:AddValue({
+    Text = "JumpPower",
+    Default = 50,
+    Callback = function(v)
+        jumpVal = v
+        local hum = GetHum()
+        if hum then hum.JumpPower = v end
+    end
+})
+
+local hipVal = 0
+MoveTab:AddValue({
+    Text = "Hip Height",
+    Default = 0,
+    Callback = function(v)
+        hipVal = v
+        local hum = GetHum()
+        if hum then hum.HipHeight = v end
+    end
+})
+
+local flySpd = 50
+MoveTab:AddValue({
+    Text = "Fly Speed",
+    Default = 50,
+    Callback = function(v) flySpd = v end
+})
+
+MoveTab:AddLabel("=== Air Strafe ===")
+
+local airStrafe = false
+local airStrafeRate = 200
+MoveTab:AddToggle({
+    Text = "Air Strafe Accel",
+    Default = false,
+    Callback = function(v) airStrafe = v end
+})
+
+MoveTab:AddValue({
+    Text = "Strafe Rate",
+    Default = 200,
+    Callback = function(v) airStrafeRate = v end
+})
+
+Services.RunService.Heartbeat:Connect(function(dt)
+    if not airStrafe then return end
+    local hum = GetHum()
+    local root = GetRoot()
+    if not hum or not root then return end
+    if hum.FloorMaterial ~= Enum.Material.Air then return end
+    
+    local camCF = Camera.CFrame
+    local flatRight = Vector3.new(camCF.RightVector.X, 0, camCF.RightVector.Z).Unit
+    local moveDir = hum.MoveDirection
+    if moveDir.Magnitude < 0.1 then return end
+    
+    local strafeAmt = moveDir:Dot(flatRight)
+    if math.abs(strafeAmt) < 0.2 then return end
+    
+    local currentVel = root.AssemblyLinearVelocity
+    local accelDir = flatRight * math.sign(strafeAmt)
+    local newVel = Vector3.new(currentVel.X, 0, currentVel.Z) + accelDir * airStrafeRate * dt
+    root.AssemblyLinearVelocity = Vector3.new(newVel.X, currentVel.Y, newVel.Z)
+end)
+
+MoveTab:AddLabel("=== Auto Actions ===")
+
+local autoBhop = false
+MoveTab:AddToggle({
+    Text = "Auto Bunnyhop",
+    Default = false,
+    Callback = function(v)
+        autoBhop = v
+        task.spawn(function()
+            while autoBhop do
+                Services.RunService.RenderStepped:Wait()
+                local hum = GetHum()
+                if hum and hum.FloorMaterial ~= Enum.Material.Air 
+                    and Services.UserInputService:IsKeyDown(Enum.KeyCode.Space) then
+                    hum:ChangeState(Enum.HumanoidStateType.Jumping)
+                end
+            end
+        end)
+    end
+})
+
+local infJump = false
+MoveTab:AddToggle({
+    Text = "Infinite Jump",
+    Default = false,
+    Callback = function(v) infJump = v end
+})
+
+Services.UserInputService.InputBegan:Connect(function(input, gp)
+    if infJump and input.KeyCode == Enum.KeyCode.Space and not gp then
+        local hum = GetHum()
+        if hum then hum:ChangeState(Enum.HumanoidStateType.Jumping) end
+    end
+end)
+
+local autoCrouch = false
+MoveTab:AddToggle({
+    Text = "Auto Crouch",
+    Default = false,
+    Callback = function(v)
+        autoCrouch = v
+        task.spawn(function()
+            while autoCrouch do
+                task.wait(0.15)
+                pcall(function()
+                    Services.VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.LeftControl, false, game)
+                    task.wait(0.05)
+                    Services.VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.LeftControl, false, game)
+                end)
+            end
+        end)
+    end
+})
+
+local autoJumpSpam = false
+MoveTab:AddToggle({
+    Text = "Auto Jump Spam",
+    Default = false,
+    Callback = function(v)
+        autoJumpSpam = v
+        task.spawn(function()
+            while autoJumpSpam do
+                task.wait(0.25)
+                local hum = GetHum()
+                if hum and hum.MoveDirection.Magnitude > 0.1 then
+                    hum:ChangeState(Enum.HumanoidStateType.Jumping)
+                end
+            end
+        end)
+    end
+})
+
+local autoSlide = false
+MoveTab:AddToggle({
+    Text = "Auto Slide",
+    Default = false,
+    Callback = function(v)
+        autoSlide = v
+        task.spawn(function()
+            while autoSlide do
+                task.wait(0.4)
+                pcall(function()
+                    Services.VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.LeftShift, false, game)
+                    task.wait(0.1)
+                    Services.VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.LeftShift, false, game)
+                end())
+            end
+        end)
+    end
+})
+
+local autoSprint = false
+MoveTab:AddToggle({
+    Text = "Auto Sprint",
+    Default = false,
+    Callback = function(v)
+        autoSprint = v
+        task.spawn(function()
+            while autoSprint do
+                task.wait(0.1)
+                pcall(function()
+                    Services.VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.LeftShift, false, game)
+                end)
+            end
+        end)
+    end
+})
+
+local autoStrafe = false
+MoveTab:AddToggle({
+    Text = "Auto Strafe (A-D)",
+    Default = false,
+    Callback = function(v)
+        autoStrafe = v
+        task.spawn(function()
+            local dir = 1
+            while autoStrafe do
+                task.wait(0.12)
+                pcall(function()
+                    local key = dir == 1 and Enum.KeyCode.A or Enum.KeyCode.D
+                    Services.VirtualInputManager:SendKeyEvent(true, key, false, game)
+                    task.wait(0.08)
+                    Services.VirtualInputManager:SendKeyEvent(false, key, false, game)
+                end)
+                dir = -dir
+            end
+        end)
+    end
+})
+
+local autoDodge = false
+MoveTab:AddToggle({
+    Text = "Auto Dodge Bots",
+    Default = false,
+    Callback = function(v)
+        autoDodge = v
+        task.spawn(function()
+            while autoDodge do
+                task.wait(0.3)
+                local root = GetRoot()
+                if not root then continue end
+                for _, bot in ipairs(GetNextbots()) do
+                    local botRoot = bot:FindFirstChild("HumanoidRootPart") or bot:FindFirstChild("Torso") or bot:FindFirstChildWhichIsA("BasePart")
+                    if botRoot and (botRoot.Position - root.Position).Magnitude < 40 then
+                        local dodgeDir = Vector3.new(math.random(-1,1), 0, math.random(-1,1)).Unit * 15
+                        root.CFrame = root.CFrame + dodgeDir
+                    end
+                end
+            end
+        end)
+    end
+})
+
+local autoDash = false
+MoveTab:AddToggle({
+    Text = "Auto Dash",
+    Default = false,
+    Callback = function(v)
+        autoDash = v
+        task.spawn(function()
+            while autoDash do
+                task.wait(0.8)
+                pcall(function() FireEvent("Dash") end)
+            end
+        end)
+    end
+})
+
+local autoWallrun = false
+MoveTab:AddToggle({
+    Text = "Auto Wallrun",
+    Default = false,
+    Callback = function(v)
+        autoWallrun = v
+        task.spawn(function()
+            while autoWallrun do
+                task.wait(0.1)
+                local hum = GetHum()
+                local root = GetRoot()
+                if not hum or not root then continue end
+                if hum.FloorMaterial ~= Enum.Material.Air then continue end
+                local ray = Ray.new(root.Position, root.CFrame.LookVector * 3)
+                local hit, pos, normal = Services.Workspace:FindPartOnRay(ray, GetChar())
+                if hit and math.abs(normal.Y) < 0.3 then
+                    root.AssemblyLinearVelocity = Vector3.new(root.AssemblyLinearVelocity.X, 25, root.AssemblyLinearVelocity.Z)
+                end
+            end
+        end)
+    end
+})
+
+local autoParkour = false
+MoveTab:AddToggle({
+    Text = "Auto Parkour",
+    Default = false,
+    Callback = function(v)
+        autoParkour = v
+        task.spawn(function()
+            while autoParkour do
+                task.wait(0.15)
+                local hum = GetHum()
+                local root = GetRoot()
+                if not hum or not root then continue end
+                if hum.FloorMaterial ~= Enum.Material.Air then continue end
+                local ray = Ray.new(root.Position, Vector3.new(0, -4, 0))
+                local hit = Services.Workspace:FindPartOnRay(ray, GetChar())
+                if hit and hit.Size.Y < 5 then
+                    root.AssemblyLinearVelocity = Vector3.new(root.AssemblyLinearVelocity.X, 20, root.AssemblyLinearVelocity.Z)
+                end
+            end
+        end)
+    end
+})
+
+local autoSpin = false
+MoveTab:AddToggle({
+    Text = "Auto Spin (Spinbot)",
+    Default = false,
+    Callback = function(v)
+        autoSpin = v
+        task.spawn(function()
+            while autoSpin do
+                task.wait(0.02)
+                local root = GetRoot()
+                if root then
+                    root.CFrame = root.CFrame * CFrame.Angles(0, math.rad(15), 0)
+                end
+            end
+        end)
+    end
+})
+
+local autoRoll = false
+MoveTab:AddToggle({
+    Text = "Auto Roll",
+    Default = false,
+    Callback = function(v)
+        autoRoll = v
+        task.spawn(function()
+            while autoRoll do
+                task.wait(0.6)
+                pcall(function() FireEvent("Roll") end)
+            end
+        end)
+    end
+})
+
+local autoEmote = false
+MoveTab:AddToggle({
+    Text = "Auto Emote",
+    Default = false,
+    Callback = function(v)
+        autoEmote = v
+        task.spawn(function()
+            local emotes = {"Dance", "Wave", "Point", "Laugh", "Cheer"}
+            while autoEmote do
+                task.wait(2)
+                pcall(function() FireEvent("Emote", emotes[math.random(1, #emotes)]) end)
+            end
+        end)
+    end
+})
+
+local autoTaunt = false
+MoveTab:AddToggle({
+    Text = "Auto Taunt",
+    Default = false,
+    Callback = function(v)
+        autoTaunt = v
+        task.spawn(function()
+            while autoTaunt do
+                task.wait(3)
+                pcall(function() FireEvent("Taunt") end)
+            end
+        end)
+    end
+})
+
+local autoFlip = false
+MoveTab:AddToggle({
+    Text = "Auto Flip",
+    Default = false,
+    Callback = function(v)
+        autoFlip = v
+        task.spawn(function()
+            while autoFlip do
+                task.wait(1.5)
+                pcall(function() FireEvent("Flip") end)
+            end
+        end)
+    end
+})
+
+local autoCrawl = false
+MoveTab:AddToggle({
+    Text = "Auto Crawl",
+    Default = false,
+    Callback = function(v)
+        autoCrawl = v
+        task.spawn(function()
+            while autoCrawl do
+                task.wait(0.3)
+                pcall(function() FireEvent("Crawl") end)
+            end
+        end)
+    end
+})
+
+local autoLean = false
+MoveTab:AddToggle({
+    Text = "Auto Lean (Q-E)",
+    Default = false,
+    Callback = function(v)
+        autoLean = v
+        task.spawn(function()
+            local dir = 1
+            while autoLean do
+                task.wait(0.2)
+                pcall(function()
+                    local key = dir == 1 and Enum.KeyCode.Q or Enum.KeyCode.E
+                    Services.VirtualInputManager:SendKeyEvent(true, key, false, game)
+                    task.wait(0.1)
+                    Services.VirtualInputManager:SendKeyEvent(false, key, false, game)
+                end)
+                dir = -dir
+            end
+        end)
+    end
+})
+
+local autoPeek = false
+MoveTab:AddToggle({
+    Text = "Auto Peek",
+    Default = false,
+    Callback = function(v)
+        autoPeek = v
+        task.spawn(function()
+            while autoPeek do
+                task.wait(0.5)
+                pcall(function() FireEvent("Peek") end)
+            end
+        end)
+    end
+})
+
+local autoClimb = false
+MoveTab:AddToggle({
+    Text = "Auto Climb",
+    Default = false,
+    Callback = function(v)
+        autoClimb = v
+        task.spawn(function()
+            while autoClimb do
+                task.wait(0.1)
+                local hum = GetHum()
+                local root = GetRoot()
+                if not hum or not root then continue end
+                if hum:GetState() == Enum.HumanoidStateType.Climbing then
+                    root.AssemblyLinearVelocity = Vector3.new(0, 20, 0)
+                end
+            end
+        end)
+    end
+})
+
+local autoSwim = false
+MoveTab:AddToggle({
+    Text = "Auto Swim Fast",
+    Default = false,
+    Callback = function(v)
+        autoSwim = v
+        task.spawn(function()
+            while autoSwim do
+                task.wait(0.1)
+                local hum = GetHum()
+                local root = GetRoot()
+                if not hum or not root then continue end
+                if hum:GetState() == Enum.HumanoidStateType.Swimming then
+                    root.AssemblyLinearVelocity = Camera.CFrame.LookVector * 50
+                end
+            end
+        end)
+    end
+})
+
+MoveTab:AddLabel("=== Flight & Noclip ===")
+
+local flying = false
+MoveTab:AddToggle({
+    Text = "Fly",
+    Default = false,
+    Callback = function(v)
+        flying = v
+        task.spawn(function()
+            local root = GetRoot()
+            if not root then return end
+            local bv
+            if flying then
+                bv = Instance.new("BodyVelocity")
+                bv.MaxForce = Vector3.new(1e5, 1e5, 1e5)
+                bv.Velocity = Vector3.zero
+                bv.Parent = root
+            end
+            while flying do
+                task.wait()
+                if not bv or not bv.Parent then
+                    bv = Instance.new("BodyVelocity")
+                    bv.MaxForce = Vector3.new(1e5, 1e5, 1e5)
+                    bv.Velocity = Vector3.zero
+                    bv.Parent = root
+                end
+                local camCF = Camera.CFrame
+                local moveDir = Vector3.zero
+                if Services.UserInputService:IsKeyDown(Enum.KeyCode.W) then moveDir += camCF.LookVector end
+                if Services.UserInputService:IsKeyDown(Enum.KeyCode.S) then moveDir -= camCF.LookVector end
+                if Services.UserInputService:IsKeyDown(Enum.KeyCode.A) then moveDir -= camCF.RightVector end
+                if Services.UserInputService:IsKeyDown(Enum.KeyCode.D) then moveDir += camCF.RightVector end
+                if Services.UserInputService:IsKeyDown(Enum.KeyCode.Space) then moveDir += Vector3.new(0, 1, 0) end
+                if Services.UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then moveDir -= Vector3.new(0, 1, 0) end
+                if moveDir.Magnitude > 0 then
+                    bv.Velocity = moveDir.Unit * flySpd
+                else
+                    bv.Velocity = Vector3.zero
+                end
+            end
+            if bv then bv:Destroy() end
+        end)
+    end
+})
+
+local noClip = false
+MoveTab:AddToggle({
+    Text = "No Clip",
+    Default = false,
+    Callback = function(v)
+        noClip = v
+        task.spawn(function()
+            while noClip do
+                Services.RunService.Stepped:Wait()
+                local char = GetChar()
+                if char then
+                    for _, part in ipairs(char:GetDescendants()) do
+                        if part:IsA("BasePart") then part.CanCollide = false end
+                    end
+                end
+            end
+            local char = GetChar()
+            if char then
+                for _, part in ipairs(char:GetDescendants()) do
+                    if part:IsA("BasePart") then part.CanCollide = true end
+                end
+            end
+        end)
+    end
+})
+
+local speedBypass = false
+MoveTab:AddToggle({
+    Text = "Speed Bypass",
+    Default = false,
+    Callback = function(v)
+        speedBypass = v
+        task.spawn(function()
+            while speedBypass do
+                task.wait(0.05)
+                local hum = GetHum()
+                local root = GetRoot()
+                if hum and root and hum.MoveDirection.Magnitude > 0 then
+                    hum.WalkSpeed = 16
+                    local vel = root.AssemblyLinearVelocity
+                    local move = hum.MoveDirection * speedVal
+                    root.AssemblyLinearVelocity = Vector3.new(move.X, vel.Y, move.Z)
+                end
+            end
+        end)
+    end
+})
+
+-----------------------------------------------------------------
+-- VISUALS TAB
+-----------------------------------------------------------------
+VisualTab:AddLabel("=== ESP ===")
+
+local espEnabled = { Players = false, Bots = false, Downed = false, Items = false }
+local espHighlights = {}
+local rainbowESP = false
+
+local function CreateESP(target, color, text, sub)
+    if not target or not target.Parent then return end
+    if espHighlights[target] then return espHighlights[target] end
+    
+    local hl = New("Highlight", {
+        Parent = target,
+        FillColor = color,
+        FillTransparency = 0.6,
+        OutlineColor = color,
+        OutlineTransparency = 0,
+        DepthMode = Enum.HighlightDepthMode.AlwaysOnTop,
+    })
+    
+    local bb = New("BillboardGui", {
+        Parent = target,
+        Size = UDim2.new(0, SC(130), 0, SC(50)),
+        StudsOffset = Vector3.new(0, 3.5, 0),
+        AlwaysOnTop = true,
+    })
+    local lbl = New("TextLabel", {
+        Parent = bb,
+        Size = UDim2.new(1, 0, 0.5, 0),
+        BackgroundTransparency = 1,
+        Text = text or target.Name,
+        TextColor3 = color,
+        TextStrokeTransparency = 0.5,
+        Font = Enum.Font.GothamBold,
+        TextSize = SC(11),
+    })
+    local subLbl = New("TextLabel", {
+        Parent = bb,
+        Position = UDim2.new(0, 0, 0.5, 0),
+        Size = UDim2.new(1, 0, 0.5, 0),
+        BackgroundTransparency = 1,
+        Text = sub or "",
+        TextColor3 = color,
+        TextStrokeTransparency = 0.5,
+        Font = Enum.Font.Gotham,
+        TextSize = SC(9),
+    })
+    
+    espHighlights[target] = { Highlight = hl, Billboard = bb, Label = lbl, SubLabel = subLbl, Color = color }
+    return espHighlights[target]
+end
+
+local function RemoveESP(target)
+    if espHighlights[target] then
+        local d = espHighlights[target]
+        if d.Highlight then d.Highlight:Destroy() end
+        if d.Billboard then d.Billboard:Destroy() end
+        espHighlights[target] = nil
+    end
+end
+
+local function ClearESP()
+    for target, _ in pairs(espHighlights) do
+        RemoveESP(target)
+    end
+end
+
+VisualTab:AddToggle({
+    Text = "Player ESP",
+    Default = false,
+    Callback = function(v)
+        espEnabled.Players = v
+        if not v then
+            for _, plr in ipairs(Services.Players:GetPlayers()) do
+                if plr.Character then RemoveESP(plr.Character) end
+            end
+        end
+    end
+})
+
+VisualTab:AddToggle({
+    Text = "Nextbot ESP",
+    Default = false,
+    Callback = function(v)
+        espEnabled.Bots = v
+        if not v then
+            for _, bot in ipairs(GetNextbots()) do
+                RemoveESP(bot)
+            end
+        end
+    end
+})
+
+VisualTab:AddToggle({
+    Text = "Downed ESP",
+    Default = false,
+    Callback = function(v)
+        espEnabled.Downed = v
+    end
+})
+
+VisualTab:AddToggle({
+    Text = "Item ESP",
+    Default = false,
+    Callback = function(v)
+        espEnabled.Items = v
+        if not v then
+            for _, obj in ipairs(Services.Workspace:GetDescendants()) do
+                if obj:IsA("BasePart") and (obj.Name:lower():find("candy") or obj.Name:lower():find("coin") 
+                    or obj.Name:lower():find("collect") or obj.Name:lower():find("cash")) then
+                    RemoveESP(obj)
+                end
+            end
+        end
+    end
+})
+
+VisualTab:AddToggle({
+    Text = "Rainbow ESP",
+    Default = false,
+    Callback = function(v) rainbowESP = v end
+})
+
+local hue = 0
+Services.RunService.RenderStepped:Connect(function(dt)
+    hue = (hue + dt * 0.5) % 1
+    for target, data in pairs(espHighlights) do
+        if target and target.Parent and data.Label then
+            local color = rainbowESP and Color3.fromHSV(hue, 0.8, 1) or data.Color
+            data.Label.TextColor3 = color
+            data.SubLabel.TextColor3 = color
+            if data.Highlight then
+                data.Highlight.FillColor = color
+                data.Highlight.OutlineColor = color
+            end
+        else
+            RemoveESP(target)
+        end
+    end
+    
+    if espEnabled.Players then
+        for _, plr in ipairs(Services.Players:GetPlayers()) do
+            if plr ~= LocalPlayer and plr.Character then
+                local extra = ""
+                local hum = plr.Character:FindFirstChildOfClass("Humanoid")
+                if hum then extra = "HP: " .. math.floor(hum.Health) end
+                local tool = plr.Character:FindFirstChildOfClass("Tool")
+                if tool then extra = extra .. " [" .. tool.Name .. "]" end
+                CreateESP(plr.Character, Theme.Success, plr.Name, extra)
+            end
+        end
+    end
+    
+    if espEnabled.Bots then
+        for _, bot in ipairs(GetNextbots()) do
+            CreateESP(bot, Theme.Danger, "NEXTBOT", "")
+        end
+    end
+    
+    if espEnabled.Downed then
+        for _, plr in ipairs(Services.Players:GetPlayers()) do
+            if plr ~= LocalPlayer and plr.Character then
+                local hum = plr.Character:FindFirstChildOfClass("Humanoid")
+                if hum and hum.Health <= 0 then
+                    CreateESP(plr.Character, Theme.Warning, "DOWNED", plr.Name)
+                end
+            end
+        end
+    end
+    
+    if espEnabled.Items then
+        for _, obj in ipairs(Services.Workspace:GetDescendants()) do
+            if obj:IsA("BasePart") and (obj.Name:lower():find("candy") or obj.Name:lower():find("coin") 
+                or obj.Name:lower():find("collect") or obj.Name:lower():find("cash") or obj.Name:lower():find("bubble")) then
+                CreateESP(obj, Color3.fromRGB(100, 150, 255), obj.Name, "")
+            end
+        end
+    end
+end)
+
+VisualTab:AddLabel("=== World ===")
+
+local fullBright = false
+VisualTab:AddToggle({
+    Text = "FullBright",
+    Default = false,
+    Callback = function(v)
+        fullBright = v
+        if v then
+            Services.Lighting.Ambient = Color3.fromRGB(255, 255, 255)
+            Services.Lighting.Brightness = 3
+            Services.Lighting.FogEnd = 1e10
+            Services.Lighting.GlobalShadows = false
+        else
+            Services.Lighting.Ambient = Color3.fromRGB(128, 128, 128)
+            Services.Lighting.Brightness = 1
+            Services.Lighting.FogEnd = 500
+            Services.Lighting.GlobalShadows = true
+        end
+    end
+})
+
+VisualTab:AddToggle({
+    Text = "No Fog",
+    Default = false,
+    Callback = function(v)
+        Services.Lighting.FogEnd = v and 1e10 or 500
+    end
+})
+
+VisualTab:AddToggle({
+    Text = "No Camera Shake",
+    Default = false,
+    Callback = function(v)
+        if v then
+            pcall(function()
+                local shaker = LocalPlayer.PlayerScripts:FindFirstChild("CameraShaker")
+                if shaker then shaker.Disabled = true end
+            end)
+        end
+    end
+})
+
+VisualTab:AddValue({
+    Text = "FOV",
+    Default = 70,
+    Callback = function(v)
+        Camera.FieldOfView = v
+    end
+})
+
+VisualTab:AddToggle({
+    Text = "Remove Barriers",
+    Default = false,
+    Callback = function(v)
+        for _, obj in ipairs(Services.Workspace:GetDescendants()) do
+            if obj:IsA("BasePart") and (obj.Name:lower():find("barrier") or obj.Name:lower():find("boundary") 
+                or obj.Name:lower():find("invisible") or obj.Name:lower():find("kill")) then
+                obj.Transparency = v and 1 or 0
+                obj.CanCollide = not v
+            end
+        end
+    end
+})
+
+VisualTab:AddToggle({
+    Text = "Fake Headless",
+    Default = false,
+    Callback = function(v)
+        local char = GetChar()
+        if char then
+            local head = char:FindFirstChild("Head")
+            if head then
+                head.Transparency = v and 1 or 0
+                for _, face in ipairs(head:GetChildren()) do
+                    if face:IsA("Decal") then face.Transparency = v and 1 or 0 end
+                end
+            end
+        end
+    end
+})
+
+VisualTab:AddToggle({
+    Text = "FPS Boost",
+    Default = false,
+    Callback = function(v)
+        if v then
+            pcall(function()
+                settings().Rendering.QualityLevel = 1
+            end)
+        end
+    end
+})
+
+
+-----------------------------------------------------------------
+-- TELEPORT TAB
+-----------------------------------------------------------------
+TeleportTab:AddButton({
+    Text = "TP to Nearest Downed",
+    Callback = function()
+        local root = GetRoot()
+        if not root then return end
+        local nearest, dist = nil, math.huge
+        for _, plr in ipairs(Services.Players:GetPlayers()) do
+            if plr ~= LocalPlayer and plr.Character then
+                local theirRoot = plr.Character:FindFirstChild("HumanoidRootPart")
+                local theirHum = plr.Character:FindFirstChildOfClass("Humanoid")
+                if theirRoot and theirHum and theirHum.Health <= 0 then
+                    local d = (theirRoot.Position - root.Position).Magnitude
+                    if d < dist then dist = d nearest = theirRoot end
+                end
+            end
+        end
+        if nearest then
+            root.CFrame = nearest.CFrame + Vector3.new(0, 3, 0)
+            CatWare:Notify({ Title = "TP", Content = "Teleported to downed player!", Duration = 2 })
+        end
+    end
+})
+
+TeleportTab:AddButton({
+    Text = "TP to Random Player",
+    Callback = function()
+        local root = GetRoot()
+        if not root then return end
+        local others = {}
+        for _, plr in ipairs(Services.Players:GetPlayers()) do
+            if plr ~= LocalPlayer and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
+                table.insert(others, plr.Character.HumanoidRootPart)
+            end
+        end
+        if #others > 0 then
+            root.CFrame = others[math.random(1, #others)].CFrame + Vector3.new(0, 3, 0)
+        end
+    end
+})
+
+TeleportTab:AddButton({
+    Text = "TP to Items",
+    Callback = function()
+        local root = GetRoot()
+        if not root then return end
+        for _, obj in ipairs(Services.Workspace:GetDescendants()) do
+            if obj:IsA("BasePart") and (obj.Name:lower():find("candy") or obj.Name:lower():find("coin")) then
+                if (obj.Position - root.Position).Magnitude < 300 then
+                    root.CFrame = obj.CFrame + Vector3.new(0, 2, 0)
+                    task.wait(0.2)
+                end
+            end
+        end
+    end
+})
+
+local avoidBots = false
+TeleportTab:AddToggle({
+    Text = "Auto Avoid Bots",
+    Default = false,
+    Callback = function(v)
+        avoidBots = v
+        task.spawn(function()
+            while avoidBots do
+                task.wait(0.2)
+                local root = GetRoot()
+                if not root then continue end
+                for _, bot in ipairs(GetNextbots()) do
+                    local botRoot = bot:FindFirstChild("HumanoidRootPart") or bot:FindFirstChild("Torso") or bot:FindFirstChildWhichIsA("BasePart")
+                    if botRoot and (botRoot.Position - root.Position).Magnitude < 25 then
+                        root.CFrame = root.CFrame + (root.CFrame.LookVector * -30)
+                        CatWare:Notify({ Title = "Avoid", Content = "Bot too close!", Duration = 2 })
+                    end
+                end
+            end
+        end)
+    end
+})
+
+TeleportTab:AddButton({
+    Text = "Rejoin Server",
+    Callback = function()
+        Services.TeleportService:Teleport(game.PlaceId, LocalPlayer)
+    end
+})
+
+TeleportTab:AddButton({
+    Text = "Server Hop",
+    Callback = function()
+        local servers = {}
+        local success, result = pcall(function()
+            return game:HttpGet("https://games.roblox.com/v1/games/" .. game.PlaceId .. "/servers/Public?sortOrder=Asc&limit=100")
+        end)
+        if success and result then
+            local data = Services.HttpService:JSONDecode(result)
+            for _, srv in ipairs(data.data) do
+                if srv.playing < srv.maxPlayers and srv.id ~= game.JobId then
+                    table.insert(servers, srv.id)
+                end
+            end
+            if #servers > 0 then
+                Services.TeleportService:TeleportToPlaceInstance(game.PlaceId, servers[math.random(1, #servers)], LocalPlayer)
+            end
+        end
+    end
+})
+
+-----------------------------------------------------------------
+-- MISC TAB
+-----------------------------------------------------------------
+MiscTab:AddLabel("=== Status Overlay ===")
+
+local fpsCounter = false
+MiscTab:AddToggle({
+    Text = "FPS Counter",
+    Default = false,
+    Callback = function(v) fpsCounter = v end
+})
+
+local showStatus = false
+MiscTab:AddToggle({
+    Text = "Show Game Status",
+    Default = false,
+    Callback = function(v) showStatus = v end
+})
+
+local showTimer = false
+MiscTab:AddToggle({
+    Text = "Show Round Timer",
+    Default = false,
+    Callback = function(v) showTimer = v end
+})
+
+MiscTab:AddDropdown({
+    Text = "Weather",
+    Options = {"Default", "Clear", "Rain", "Foggy", "Storm"},
+    Default = "Default",
+    Callback = function(v)
+        pcall(function() FireEvent("SetWeather", v) end)
+    end
+})
+
+MiscTab:AddLabel("=== Config ===")
+
+MiscTab:AddButton({
+    Text = "Save Config",
+    Callback = function()
+        pcall(function()
+            local cfg = {
+                speed = speedVal, jump = jumpVal, hip = hipVal,
+                fly = flySpd, strafe = airStrafeRate,
+            }
+            writefile("CatWare_v5.json", Services.HttpService:JSONEncode(cfg))
+            CatWare:Notify({ Title = "Config", Content = "Saved!", Duration = 2 })
+        end)
+    end
+})
+
+MiscTab:AddButton({
+    Text = "Load Config",
+    Callback = function()
+        pcall(function()
+            if isfile("CatWare_v5.json") then
+                local cfg = Services.HttpService:JSONDecode(readfile("CatWare_v5.json"))
+                if cfg.speed then speedVal = cfg.speed end
+                if cfg.jump then jumpVal = cfg.jump end
+                if cfg.hip then hipVal = cfg.hip end
+                if cfg.fly then flySpd = cfg.fly end
+                if cfg.strafe then airStrafeRate = cfg.strafe end
+                CatWare:Notify({ Title = "Config", Content = "Loaded!", Duration = 2 })
+            end
+        end)
+    end
+})
+
+MiscTab:AddButton({
+    Text = "Destroy UI",
+    Callback = function()
+        if Gui then Gui:Destroy() end
+    end
+})
+
+-----------------------------------------------------------------
+-- INFO TAB
+-----------------------------------------------------------------
+InfoTab:AddLabel("CatWare v5.0")
+InfoTab:AddLabel("By: Zachary")
+InfoTab:AddLabel("Version: " .. EvadeVersion)
+InfoTab:AddLabel("")
+InfoTab:AddLabel("Features: 60+ Modules")
+InfoTab:AddLabel("Mobile: " .. (IsMobile and "Yes" or "No"))
+InfoTab:AddLabel("")
+InfoTab:AddLabel("Credits:")
+InfoTab:AddLabel("- zReal-King")
+InfoTab:AddLabel("- Draconic Hub")
+InfoTab:AddLabel("- Tbao Hub")
+InfoTab:AddLabel("- ReddyHub")
+InfoTab:AddLabel("- GodMode Farm")
+InfoTab:AddLabel("")
+
+InfoTab:AddButton({
+    Text = "Play Meow",
+    Callback = function()
+        local s = Instance.new("Sound", PlayerGui)
+        s.SoundId = "rbxassetid://138131333"
+        s.Volume = 2
+        s:Play()
+        game:GetService("Debris"):AddItem(s, 2)
+    end
+})
+
+InfoTab:AddButton({
+    Text = "Copy Discord",
+    Callback = function()
+        pcall(function() setclipboard("discord.gg/catware") end)
+        CatWare:Notify({ Title = "Copied!", Content = "Discord copied!", Duration = 2 })
+    end
+})
+
+-----------------------------------------------------------------
+-- STATUS OVERLAY GUI
+-----------------------------------------------------------------
+local StatusGui = New("ScreenGui", {
+    Name = "CatWareStatus",
+    ResetOnSpawn = false,
+    Parent = PlayerGui,
+})
+
+local StatusFrame = New("Frame", {
+    Position = UDim2.new(0, SC(10), 0, SC(10)),
+    Size = UDim2.new(0, SC(200), 0, SC(90)),
+    BackgroundColor3 = Theme.CardColor,
+    BackgroundTransparency = 0.25,
+    Visible = false,
+    Parent = StatusGui,
+})
+Corner(StatusFrame, 8)
+Stroke(StatusFrame, Theme.StrokeColor)
+
+local FpsLbl = New("TextLabel", {
+    Position = UDim2.new(0, SC(8), 0, SC(4)),
+    Size = UDim2.new(1, -SC(16), 0, SC(22)),
+    BackgroundTransparency = 1,
+    Text = "FPS: --",
+    Font = Theme.Font,
+    TextColor3 = Theme.TextColor,
+    TextSize = SC(12),
+    TextXAlignment = Enum.TextXAlignment.Left,
+    Parent = StatusFrame,
+})
+
+local StatusLbl = New("TextLabel", {
+    Position = UDim2.new(0, SC(8), 0, SC(28)),
+    Size = UDim2.new(1, -SC(16), 0, SC(22)),
+    BackgroundTransparency = 1,
+    Text = "Status: --",
+    Font = Theme.Font,
+    TextColor3 = Theme.TextColor,
+    TextSize = SC(12),
+    TextXAlignment = Enum.TextXAlignment.Left,
+    Parent = StatusFrame,
+})
+
+local TimerLbl = New("TextLabel", {
+    Position = UDim2.new(0, SC(8), 0, SC(52)),
+    Size = UDim2.new(1, -SC(16), 0, SC(22)),
+    BackgroundTransparency = 1,
+    Text = "Timer: --",
+    Font = Theme.Font,
+    TextColor3 = Theme.TextColor,
+    TextSize = SC(12),
+    TextXAlignment = Enum.TextXAlignment.Left,
+    Parent = StatusFrame,
+})
+
+local LastTime = tick()
+local FrameCount = 0
+Services.RunService.RenderStepped:Connect(function()
+    FrameCount += 1
+    local now = tick()
+    if now - LastTime >= 1 then
+        if fpsCounter then FpsLbl.Text = "FPS: " .. FrameCount end
+        FrameCount = 0
+        LastTime = now
+    end
+    
+    StatusFrame.Visible = fpsCounter or showStatus or showTimer
+    FpsLbl.Visible = fpsCounter
+    StatusLbl.Visible = showStatus
+    TimerLbl.Visible = showTimer
+    
+    if showStatus then
+        local status = "In Game"
+        pcall(function()
+            local gs = Services.ReplicatedStorage:FindFirstChild("GameStatus")
+            if gs then status = gs.Value end
+        end)
+        StatusLbl.Text = "Status: " .. status
+    end
+    
+    if showTimer then
+        local timeLeft = "--"
+        pcall(function()
+            local rt = Services.ReplicatedStorage:FindFirstChild("RoundTimer") 
+                or Services.Workspace:FindFirstChild("RoundTimer")
+            if rt and rt:IsA("NumberValue") then
+                timeLeft = math.ceil(rt.Value) .. "s"
+            end
+        end)
+        TimerLbl.Text = "Timer: " .. timeLeft
+    end
+end)
+
+-----------------------------------------------------------------
+-- UI TOGGLE KEY (Y)
+-----------------------------------------------------------------
+Services.UserInputService.InputBegan:Connect(function(input, gp)
+    if not gp and input.KeyCode == Enum.KeyCode.Y then
+        if MainFrame.Visible then
+            Tween(MainFrame, { Size = UDim2.new(0, WinSize.X, 0, 0) }, 0.25, Enum.EasingStyle.Quart, Enum.EasingDirection.In)
+            task.wait(0.25)
+            MainFrame.Visible = false
+            OpenBtn.Visible = true
+            Spring(OpenBtn, { Size = UDim2.new(0, SC(52), 0, SC(52)) }, 0.4)
+        else
+            MainFrame.Visible = true
+            Spring(MainFrame, { Size = UDim2.new(0, WinSize.X, 0, WinSize.Y) }, 0.4)
+        end
+    end
+end)
+
+-----------------------------------------------------------------
+-- CHARACTER ADDED (Persistence)
+-----------------------------------------------------------------
+LocalPlayer.CharacterAdded:Connect(function(char)
+    task.wait(0.5)
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if hum then
+        if speedVal ~= 16 then hum.WalkSpeed = speedVal end
+        if jumpVal ~= 50 then hum.JumpPower = jumpVal end
+        if hipVal ~= 0 then hum.HipHeight = hipVal end
+    end
+end)
+
+-----------------------------------------------------------------
+-- FINAL NOTIFICATION
+-----------------------------------------------------------------
+task.wait(0.5)
+CatWare:Notify({
+    Title = "CatWare v5.0 Ready!",
+    Content = EvadeVersion .. " detected. Press Y to toggle. Mobile: " .. (IsMobile and "ON" or "OFF"),
+    Duration = 5,
+    Color = Theme.Success,
+})
